@@ -25,8 +25,15 @@ ROLLING_TIER = 1.0
 EARLY_ACCESS_TIER = 0.5
 OTHER_TIER = 0.7
 SKIP_UNLOCK = re.compile(
-    r"simultaneous|single global|single simultaneous|PC only|PC single|"
-    r"F2P|free-to-play|live-service", re.IGNORECASE
+    r"\b(?:simultaneous|global|PC[ -]+only|PC[ -]+single|"
+    r"F2P|free[ -]to[ -]play|live[ -]service)\b", re.IGNORECASE
+)
+NEGATED_UNLOCK = re.compile(
+    r"\b(?:no|not|never|without|neither)\s+"
+    r"(?:(?:a|an|any|single|fully|truly)\s+)*"
+    + SKIP_UNLOCK.pattern
+    + r"(?:\s*(?:/|and|or|nor)\s*" + SKIP_UNLOCK.pattern + r")*",
+    re.IGNORECASE,
 )
 BW = 0.5
 SIZE_BW = 1.5
@@ -108,7 +115,9 @@ def comparable_data(case: dict, day_start: datetime) -> list[dict]:
     comparables = []
     for comp in case.get("comparables") or []:
         unlock = comp.get("unlock") or ""
-        if "before release" in comp["name"].lower() or SKIP_UNLOCK.search(unlock):
+        # Remove only negated descriptors; an affirmative elsewhere still excludes.
+        affirmative_unlock = NEGATED_UNLOCK.sub("", unlock)
+        if "before release" in comp["name"].lower() or SKIP_UNLOCK.search(affirmative_unlock):
             continue
         comp_start = parse_time(comp["day_start"])
         logs = {
