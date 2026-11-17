@@ -32,7 +32,7 @@ NEGATED_UNLOCK = re.compile(
     r"\b(?:no|not|never|without|neither)\s+"
     r"(?:(?:a|an|any|single|fully|truly)\s+)*"
     + SKIP_UNLOCK.pattern
-    + r"(?:\s*(?:/|and|or|nor)\s*" + SKIP_UNLOCK.pattern + r")*",
+    + r"(?:(?:\s*(?:/|and|or|nor)\s*|\s+)" + SKIP_UNLOCK.pattern + r")*",
     re.IGNORECASE,
 )
 BW = 0.3
@@ -226,7 +226,10 @@ def first_hour_momentum(case: dict, p1: float) -> float:
         return 0.0
     if any(not math.isfinite(value) for value in values):
         raise ValueError("Non-finite momentum viewers")
-    g = log_viewers(math.fsum(values) / len(values)) - math.log(p1)
+    mean = math.fsum(values) / len(values)
+    if mean <= 0:
+        return -MOM_CLIP
+    g = math.log(mean) - math.log(p1)
     return min(MOM_CLIP, max(-MOM_CLIP, g))
 
 
