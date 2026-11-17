@@ -9,9 +9,11 @@ Given the observed hour-1 average, predicts hours 2–24 at the 5th, 25th, 50th,
 
 ## Method
 
-Weights comparable-launch analogs by their last 12 pre-launch hours' shape and hour-1 audience size. Aligns US daylight-saving time (DST) across launch dates, then blends weighted median launch ratios (70%) with a rolling-midnight console prior (30%).
+Weights comparable-launch analogs by their last 12 pre-launch hours' shape and hour-1 audience size. Aligns US daylight-saving time (DST) across launch dates, then blends weighted median launch ratios (50%) with a rolling-midnight console prior (50%).
 
 The prior reflects regional midnight unlocks and evening viewing. The US unlocks together at midnight Eastern, **05:00Z** on the November launch date; Canada follows the same unlock.
+
+We use `A=0.5` because Red Dead Redemption 2, Rockstar's last launch and also console-only with a shared US unlock at midnight Eastern, dipped less after hour 1 and rose more by the US afternoon than the Sony comparables, while GTA VI's midnight Eastern streams (Kai Cenat, Lacy and others) are US-centred.
 
 Adds decaying intra-hour momentum from the final 15 minutes before the checkpoint. Uses log-normal quantiles with a wider upper tail and a horizon-growing log-spread floor, `0.10 + 0.10 * sqrt(hour - 1)`, adjusted for comparable dispersion and capped at `0.55`.
 
@@ -40,11 +42,11 @@ Leave-one-launch-out mean log pinball loss, averaged per launch (lower is better
 
 | Launch group | Count | Forecast | Baseline |
 | --- | ---: | ---: | ---: |
-| All eligible | 26 | 0.263570 | 0.369485 |
-| Rolling eligible | 12 | 0.253617 | 0.387772 |
-| Four practice launches | 4 | 0.208842 | 0.387097 |
+| All eligible | 26 | 0.277296 | 0.369485 |
+| Rolling eligible | 12 | 0.258846 | 0.387772 |
+| Four practice launches | 4 | 0.217717 | 0.387097 |
 
-The synthetic mid scenario starts with a 700,000-viewer hour-1 mean. Its peak forecast median is **993,136 viewers** at **hour 21 (20:00–21:00 UTC)**. Generated scenarios stay outside the repo, by default in `/tmp/gta_syn`.
+The synthetic mid scenario starts with a 700,000-viewer hour-1 mean. Its peak forecast median is **1,103,261 viewers** at **hour 21 (20:00–21:00 UTC)**. Generated scenarios stay outside the repo, by default in `/tmp/gta_syn`.
 
 ## Sources
 
