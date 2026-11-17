@@ -28,6 +28,21 @@ SKIP_UNLOCK = re.compile(
     r"simultaneous|single global|single simultaneous|PC only|PC single|"
     r"F2P|free-to-play|live-service", re.IGNORECASE
 )
+BW = 0.5
+SIZE_BW = 1.5
+MIN_SHARED_FEATURES = 3
+DEFAULT_DISTANCE = 1.0
+A = 0.5
+FLOOR0 = 0.10
+FLOOR1 = 0.08
+K_SD = 0.8
+SIGMA_CAP = 1.2
+UP_SKEW = 1.1
+PRIOR = (
+    0.92, 0.85, 0.85, 0.95, 1.45, 1.50, 1.40, 1.25,
+    1.10, 1.00, 0.95, 0.95, 1.05, 1.20, 1.40, 1.60,
+    1.80, 1.95, 2.05, 2.05, 1.95, 1.80, 1.60,
+)
 
 
 def parse_time(value: str) -> datetime:
@@ -134,6 +149,49 @@ def comparable_data(case: dict, day_start: datetime) -> list[dict]:
     return comparables
 
 
+def weight_comparables(comparables: list[dict], features: dict[int, float], p1: float) -> None:
+    log_anchor = math.log(p1)
+    for comp in comparables:
+        shared = sorted(features.keys() & comp["features"].keys())
+        if len(shared) < MIN_SHARED_FEATURES:
+            distance_squared = DEFAULT_DISTANCE ** 2
+        else:
+            recency = [1 / math.sqrt(k) for k in shared]
+            distance_squared = math.fsum(
+                w * (comp["features"][k] - features[k]) ** 2
+                for k, w in zip(shared, recency)
+            ) / math.fsum(recency)
+        size_difference = comp["anchor"] - log_anchor
+        comp["log_weight"] = (
+            math.log(comp["tier"]) - distance_squared / (2 * BW ** 2)
+            - size_difference ** 2 / (2 * SIZE_BW ** 2)
+        )
+
+
+def weighted_summary(comparables: list[dict], hour: int) -> tuple[float, float] | None:
+    available = [comp for comp in comparables if hour in comp["ratios"]]
+    if not available:
+        return None
+    # A common rescaling preserves weighted statistics and prevents underflow.
+    max_log_weight = max(comp["log_weight"] for comp in available)
+    values = sorted(
+        (comp["ratios"][hour], math.exp(comp["log_weight"] - max_log_weight))
+        for comp in available
+    )
+    total_weight = math.fsum(w for _, w in values)
+    cumulative = 0.0
+    median = values[-1][0]
+    for value, weight in values:
+        cumulative += weight
+        if cumulative >= total_weight / 2:
+            median = value
+            break
+    mean = math.fsum(value * weight for value, weight in values) / total_weight
+    sd = math.sqrt(math.fsum(weight * (value - mean) ** 2
+                             for value, weight in values) / total_weight)
+    return median, sd
+
+
 def first_viewers(case: dict) -> float:
     value = float(case["known"][0]["viewers"])
     if not math.isfinite(value):
@@ -158,7 +216,29 @@ def baseline_forecast(p1: float) -> dict:
 
 
 def forecast_case(case: dict) -> dict:
-    return baseline_forecast(first_viewers(case))
+    p1 = first_viewers(case)
+    day_start = parse_time(case["day_start"])
+    features = pre_features(case, day_start, p1)
+    comparables = comparable_data(case, day_start)
+    weight_comparables(comparables, features, p1)
+    prior_shift = dst(day_start.date())
+    log_anchor = math.log(p1)
+    hours = []
+    for hour in range(FIRST_HOUR, LAST_HOUR + 1):
+        prior_index = min(hour - FIRST_HOUR + prior_shift, len(PRIOR) - 1)
+        prior_log = math.log(PRIOR[prior_index])
+        summary = weighted_summary(comparables, hour)
+        if summary is None:
+            median_log, sd = prior_log, 0.0
+        else:
+            comp_median, sd = summary
+            median_log = A * comp_median + (1 - A) * prior_log
+        sigma = min(SIGMA_CAP, max(FLOOR0 + FLOOR1 * math.sqrt(hour - 1), K_SD * sd))
+        q = [math.exp(min(math.log(MAX_QUANTILE),
+                         log_anchor + median_log + z * sigma * (UP_SKEW if z > 0 else 1)))
+             for z in Z]
+        hours.append({"hour": hour, "q": valid_quantiles(q)})
+    return {"hours": hours}
 
 
 def write_forecast(output_dir: Path, case_id: str, forecast: dict) -> None:
