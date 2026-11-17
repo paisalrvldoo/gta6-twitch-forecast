@@ -35,16 +35,16 @@ NEGATED_UNLOCK = re.compile(
     + r"(?:\s*(?:/|and|or|nor)\s*" + SKIP_UNLOCK.pattern + r")*",
     re.IGNORECASE,
 )
-BW = 0.5
+BW = 0.3
 SIZE_BW = 1.5
 MIN_SHARED_FEATURES = 3
 DEFAULT_DISTANCE = 1.0
-A = 0.5
+A = 0.6
 FLOOR0 = 0.10
-FLOOR1 = 0.08
-K_SD = 0.8
+FLOOR1 = 0.12
+K_SD = 0.6
 SIGMA_CAP = 1.2
-UP_SKEW = 1.1
+UP_SKEW = 1.2
 PRIOR = (
     0.92, 0.85, 0.85, 0.95, 1.45, 1.50, 1.40, 1.25,
     1.10, 1.00, 0.95, 0.95, 1.05, 1.20, 1.40, 1.60,
