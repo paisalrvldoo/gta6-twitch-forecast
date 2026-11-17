@@ -3,6 +3,7 @@
 import json
 import math
 import os
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # All model and output constants live here for subsequent tuning.
@@ -13,6 +14,57 @@ BASELINE_SIGMA = 0.15
 MIN_ANCHOR = 1.0
 MIN_QUANTILE = 1e-9
 MAX_QUANTILE = 1e9
+PRE_HOURS = 12
+FEATURE_MIN = -4.0
+FEATURE_MAX = 2.0
+HOUR_SECONDS = 3600
+
+
+def parse_time(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def hour_offset(value: str, day_start: datetime) -> int:
+    return math.floor((parse_time(value) - day_start).total_seconds() / HOUR_SECONDS)
+
+
+def dst(day: date) -> int:
+    """US daylight time under the specified second-March/first-November rule."""
+    march = date(day.year, 3, 8)
+    november = date(day.year, 11, 1)
+    start = march + timedelta(days=(6 - march.weekday()) % 7)
+    end = november + timedelta(days=(6 - november.weekday()) % 7)
+    return int(start <= day < end)
+
+
+def log_viewers(value: float) -> float:
+    value = float(value)
+    if not math.isfinite(value):
+        raise ValueError("Non-finite history viewers")
+    return math.log(max(MIN_ANCHOR, value))
+
+
+def pre_features(case: dict, day_start: datetime, p1: float) -> dict[int, float]:
+    """Hourly pre-launch means relative to the target's hour-1 print."""
+    rows = case.get("history_hourly") or []
+    time_key = "from"
+    if not rows:
+        rows = case.get("history") or []
+        time_key = "at"
+    buckets = {}
+    for row in rows:
+        offset = hour_offset(row[time_key], day_start)
+        if -PRE_HOURS <= offset < 0:
+            value = float(row["viewers"])
+            if not math.isfinite(value):
+                raise ValueError("Non-finite history viewers")
+            buckets.setdefault(-offset, []).append(value)
+    log_anchor = math.log(p1)
+    return {
+        k: min(FEATURE_MAX, max(FEATURE_MIN,
+               log_viewers(math.fsum(values) / len(values)) - log_anchor))
+        for k, values in buckets.items()
+    }
 
 
 def first_viewers(case: dict) -> float:
