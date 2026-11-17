@@ -45,6 +45,11 @@ FLOOR1 = 0.12
 K_SD = 0.6
 SIGMA_CAP = 1.2
 UP_SKEW = 1.2
+MOM_W = 0.5
+MOM_DECAY = 0.6
+MOM_MIN_POINTS = 10
+MOM_MINUTES = 15
+MOM_CLIP = 0.3
 PRIOR = (
     0.92, 0.85, 0.85, 0.95, 1.45, 1.50, 1.40, 1.25,
     1.10, 1.00, 0.95, 0.95, 1.05, 1.20, 1.40, 1.60,
@@ -208,6 +213,23 @@ def first_viewers(case: dict) -> float:
     return max(MIN_ANCHOR, value)
 
 
+def first_hour_momentum(case: dict, p1: float) -> float:
+    """Final-quarter-hour lift; sparse hourly practice histories are a no-op."""
+    history = case.get("history") or []
+    if not history or not case.get("checkpoint"):
+        return 0.0
+    checkpoint = parse_time(case["checkpoint"])
+    start = checkpoint - timedelta(minutes=MOM_MINUTES)
+    values = [float(row["viewers"]) for row in history
+              if start <= parse_time(row["at"]) <= checkpoint]
+    if len(values) < MOM_MIN_POINTS:
+        return 0.0
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("Non-finite momentum viewers")
+    g = log_viewers(math.fsum(values) / len(values)) - math.log(p1)
+    return min(MOM_CLIP, max(-MOM_CLIP, g))
+
+
 def valid_quantiles(values: list[float]) -> list[float]:
     if len(values) != len(Z) or any(not math.isfinite(q) for q in values):
         raise ValueError("Invalid quantiles")
@@ -232,6 +254,7 @@ def forecast_case(case: dict) -> dict:
     weight_comparables(comparables, features, p1)
     prior_shift = dst(day_start.date())
     log_anchor = math.log(p1)
+    momentum = first_hour_momentum(case, p1)
     hours = []
     for hour in range(FIRST_HOUR, LAST_HOUR + 1):
         prior_index = min(hour - FIRST_HOUR + prior_shift, len(PRIOR) - 1)
@@ -242,6 +265,7 @@ def forecast_case(case: dict) -> dict:
         else:
             comp_median, sd = summary
             median_log = A * comp_median + (1 - A) * prior_log
+        median_log += MOM_W * momentum * MOM_DECAY ** (hour - FIRST_HOUR)
         sigma = min(SIGMA_CAP, max(FLOOR0 + FLOOR1 * math.sqrt(hour - 1), K_SD * sd))
         q = [math.exp(min(math.log(MAX_QUANTILE),
                          log_anchor + median_log + z * sigma * (UP_SKEW if z > 0 else 1)))
