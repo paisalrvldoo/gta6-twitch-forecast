@@ -3,6 +3,8 @@
 import json
 import math
 import os
+import re
+from bisect import bisect_left
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -18,6 +20,14 @@ PRE_HOURS = 12
 FEATURE_MIN = -4.0
 FEATURE_MAX = 2.0
 HOUR_SECONDS = 3600
+MAX_LAUNCH_RATIO = 15.0
+ROLLING_TIER = 1.0
+EARLY_ACCESS_TIER = 0.5
+OTHER_TIER = 0.7
+SKIP_UNLOCK = re.compile(
+    r"simultaneous|single global|single simultaneous|PC only|PC single|"
+    r"F2P|free-to-play|live-service", re.IGNORECASE
+)
 
 
 def parse_time(value: str) -> datetime:
@@ -65,6 +75,63 @@ def pre_features(case: dict, day_start: datetime, p1: float) -> dict[int, float]
                log_viewers(math.fsum(values) / len(values)) - log_anchor))
         for k, values in buckets.items()
     }
+
+
+def interpolated_log(logs: dict[int, float], offsets: list[int], hour: int) -> float | None:
+    """Interpolate only inside the comparable's observed hourly range."""
+    if hour in logs:
+        return logs[hour]
+    pos = bisect_left(offsets, hour)
+    if pos == 0 or pos == len(offsets):
+        return None
+    left, right = offsets[pos - 1], offsets[pos]
+    fraction = (hour - left) / (right - left)
+    return logs[left] + fraction * (logs[right] - logs[left])
+
+
+def comparable_data(case: dict, day_start: datetime) -> list[dict]:
+    comparables = []
+    for comp in case.get("comparables") or []:
+        unlock = comp.get("unlock") or ""
+        if "before release" in comp["name"].lower() or SKIP_UNLOCK.search(unlock):
+            continue
+        comp_start = parse_time(comp["day_start"])
+        logs = {
+            hour_offset(row["from"], comp_start): log_viewers(row["viewers"])
+            for row in comp.get("hourly") or []
+        }
+        if 0 not in logs:
+            continue
+        offsets = sorted(logs)
+        launch_logs = [
+            value for h in range(1, LAST_HOUR)
+            if (value := interpolated_log(logs, offsets, h)) is not None
+        ]
+        if launch_logs and max(launch_logs) - logs[0] > math.log(MAX_LAUNCH_RATIO):
+            continue
+        shift = dst(comp_start.date()) - dst(day_start.date())
+        # Anchors must be observed; interpolation fills interior features/ratios only.
+        if -shift not in logs:
+            continue
+        anchor = logs[-shift]
+        features = {
+            k: value - anchor for k in range(1, PRE_HOURS + 1)
+            if (value := interpolated_log(logs, offsets, -k - shift)) is not None
+        }
+        ratios = {
+            h: value - anchor for h in range(FIRST_HOUR, LAST_HOUR + 1)
+            if (value := interpolated_log(logs, offsets, h - 1 - shift)) is not None
+        }
+        unlock_lower = unlock.lower()
+        if "midnight local" in unlock_lower or "rolling" in unlock_lower:
+            tier = ROLLING_TIER
+        elif "early access" in unlock_lower or "early-access" in unlock_lower:
+            tier = EARLY_ACCESS_TIER
+        else:
+            tier = OTHER_TIER
+        comparables.append({"anchor": anchor, "features": features,
+                            "ratios": ratios, "tier": tier})
+    return comparables
 
 
 def first_viewers(case: dict) -> float:
