@@ -4,6 +4,8 @@ import argparse
 import json
 import math
 import sys
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -16,6 +18,13 @@ INPUT_DIR = Path("/workspace/gta6/kit/gta6-twitch-ccu-forecast-01-kit/input")
 ANSWERS_PATH = Path("/workspace/gta6/research/practice_answers.json")
 PRACTICE_IDS = ("p00", "p01", "p02", "p03")
 LEVELS = (0.05, 0.25, 0.5, 0.75, 0.95)
+GRID = {
+    "A": (0.3, 0.5, 0.7, 0.9),
+    "BW": (0.3, 0.5, 0.8),
+    "K_SD": (0.6, 0.8, 1.0),
+    "FLOOR1": (0.05, 0.08, 0.12),
+    "UP_SKEW": (1.0, 1.1, 1.25),
+}
 
 
 @dataclass
@@ -131,6 +140,53 @@ def evaluate(targets: list[Target]) -> list[Score]:
     ) for target in targets]
 
 
+@contextmanager
+def temporary_settings(settings: dict[str, float]):
+    """Patch imported model globals for one evaluation, restoring them even on error."""
+    previous = {name: getattr(model, name) for name in settings}
+    try:
+        for name, value in settings.items():
+            setattr(model, name, value)
+        yield
+    finally:
+        for name, value in previous.items():
+            setattr(model, name, value)
+
+
+def format_settings(settings: dict[str, float]) -> str:
+    return ", ".join(f"{name}={value:g}" for name, value in settings.items())
+
+
+def search_grid(targets: list[Target]) -> dict[str, float]:
+    rolling = [t for t in targets if t.eligible and t.rolling]
+    if not rolling:
+        raise ValueError("Grid search requires at least one eligible rolling launch")
+    best = {name: getattr(model, name) for name in GRID}
+    cache = {}
+
+    def objective(settings: dict[str, float]) -> float:
+        key = tuple(settings[name] for name in GRID)
+        if key not in cache:
+            with temporary_settings(settings):
+                losses = [pinball_loss(model.forecast_case(t.case), t.actual) for t in rolling]
+            cache[key] = math.fsum(losses) / len(losses)
+        return cache[key]
+
+    best_loss = objective(best)
+    print("\nTwo-pass coordinate search, minimizing rolling-eligible mean:")
+    for pass_number in range(1, 3):
+        for name, values in GRID.items():
+            for value in values:
+                candidate = {**best, name: value}
+                loss = objective(candidate)
+                if loss < best_loss:
+                    best, best_loss = candidate, loss
+        print(f"Pass {pass_number}: rolling={best_loss:.6f}; {format_settings(best)}")
+    print(f"Best settings: {format_settings(best)}")
+    print(f"Best rolling loss: {best_loss:.6f}; {len(cache)} distinct settings evaluated")
+    return best
+
+
 def print_scores(scores: list[Score]) -> None:
     print(f"{'Launch':<48} {'Hours':>5} {'Forecast':>10} {'Baseline':>10}  Groups")
     for score in scores:
@@ -163,11 +219,21 @@ def main() -> None:
                         help="External practice answers JSON (never copied into the repo)")
     parser.add_argument("--input-dir", type=Path, default=INPUT_DIR,
                         help="Directory containing kit practice cases p00..p03")
+    parser.add_argument("--grid", action="store_true",
+                        help="Search two coordinate passes over model constants for rolling launches")
     args = parser.parse_args()
+    started = time.perf_counter()
     pool = load_pool(args.input_dir, args.answers)
     targets = make_targets(pool)
     print(f"Pool: {len(pool)} launches; each target uses the other {len(pool) - 1}.")
+    print(f"Current settings: {format_settings({name: getattr(model, name) for name in GRID})}")
     print_scores(evaluate(targets))
+    if args.grid:
+        best = search_grid(targets)
+        print("\nEvaluation with best grid settings (temporary overrides):")
+        with temporary_settings(best):
+            print_scores(evaluate(targets))
+    print(f"\nElapsed: {time.perf_counter() - started:.2f}s")
 
 
 if __name__ == "__main__":
