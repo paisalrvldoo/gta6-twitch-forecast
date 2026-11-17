@@ -1,0 +1,4 @@
+out/
+__pycache__/
+*.tar.gz
+wallet*.json
